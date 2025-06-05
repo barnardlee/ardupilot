@@ -46,5 +46,5 @@
 	path = modules/littlefs
 	url = https://github.com/ArduPilot/littlefs.git
 [submodule "modules/threadx"]
-	path = modules/threadx
+	path = modules/threadX
 	url = https://github.com/barnardlee/threadx.git

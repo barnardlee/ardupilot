@@ -593,6 +593,10 @@ def add_dynamic_boards_chibios():
     '''add boards based on existence of hwdef.dat in subdirectories for ChibiOS'''
     add_dynamic_boards_from_hwdef_dir(chibios, 'libraries/AP_HAL_ChibiOS/hwdef')
 
+def add_dynamic_boards_threadx():
+    '''add boards based on existence of hwdef.dat in subdirectories for threadX'''
+    add_dynamic_boards_from_hwdef_dir(threadx, 'libraries/AP_HAL_threadX/hwdef')
+
 def add_dynamic_boards_linux():
     '''add boards based on existence of hwdef.dat in subdirectories for '''
     add_dynamic_boards_from_hwdef_dir(linux, 'libraries/AP_HAL_Linux/hwdef')
@@ -623,6 +627,7 @@ def add_dynamic_boards_esp32():
 
 def get_boards_names():
     add_dynamic_boards_chibios()
+    add_dynamic_boards_threadx()
     add_dynamic_boards_esp32()
     add_dynamic_boards_linux()
 
@@ -1394,6 +1399,258 @@ class chibios(Board):
         if fun:
             fun(bld)
         super(chibios, self).pre_build(bld)
+
+    def get_name(self):
+        return self.name
+
+class threadx(Board):
+    abstract = True
+    toolchain = 'arm-none-eabi'
+
+    def configure_env(self, cfg, env):
+        if hasattr(self, 'hwdef'):
+            cfg.env.HWDEF = self.hwdef
+        super().configure_env(cfg, env)
+
+        cfg.load('threadx')
+        env.BOARD = self.name
+        env.BOARD_CLASS = "threadX"
+
+        env.DEFINES.update(
+            CONFIG_HAL_BOARD = 'HAL_BOARD_THREADX',
+            HAVE_STD_NULLPTR_T = 0,
+            USE_LIBC_REALLOC = 0,
+        )
+
+        env.AP_LIBRARIES += [
+            'AP_HAL_threadX',
+        ]
+
+        # make board name available for USB IDs
+        env.THREADX_BOARD_NAME = 'HAL_BOARD_NAME="%s"' % self.name
+        env.HAL_MAX_STACK_FRAME_SIZE = 'HAL_MAX_STACK_FRAME_SIZE=%d' % 1300 # set per Wframe-larger-than, ensure its same
+        env.CFLAGS += cfg.env.CPU_FLAGS + [
+            '-Wlogical-op',
+            '-Wframe-larger-than=1300',
+            '-Wno-attributes',
+            '-fno-exceptions',
+            '-Wall',
+            '-Wextra',
+            '-Wno-sign-compare',
+            '-Wfloat-equal',
+            '-Wpointer-arith',
+            '-Wmissing-declarations',
+            '-Wno-unused-parameter',
+            '-Werror=array-bounds',
+            '-Wfatal-errors',
+            '-Werror=uninitialized',
+            '-Werror=init-self',
+            '-Werror=unused-but-set-variable',
+            '-Wno-missing-field-initializers',
+            '-Wno-trigraphs',
+            '-fno-strict-aliasing',
+            '-fomit-frame-pointer',
+            '-falign-functions=16',
+            '-ffunction-sections',
+            '-fdata-sections',
+            '-fno-strength-reduce',
+            '-fno-builtin-printf',
+            '-fno-builtin-fprintf',
+            '-fno-builtin-vprintf',
+            '-fno-builtin-vfprintf',
+            '-fno-builtin-puts',
+            '-fno-math-errno',
+            '-mno-thumb-interwork',
+            '-mthumb',
+            '--specs=nano.specs',
+            '--specs=nosys.specs',
+            '-D__USE_CMSIS',
+            '-Werror=deprecated-declarations',
+            '-DNDEBUG=1'
+        ]
+        if not cfg.options.Werror:
+            env.CFLAGS += [
+            '-Wno-error=double-promotion',
+            '-Wno-error=missing-declarations',
+            '-Wno-error=float-equal',
+            '-Wno-error=cpp',
+            ]
+
+        env.CXXFLAGS += env.CFLAGS + [
+            '-fno-rtti',
+            '-fno-threadsafe-statics',
+        ]
+        env.CFLAGS += [
+            '-std=c11'
+        ]
+
+        if Utils.unversioned_sys_platform() == 'cygwin':
+            env.CXXFLAGS += ['-DCYGWIN_BUILD']
+
+        bldnode = cfg.bldnode.make_node(self.name)
+        env.BUILDROOT = bldnode.make_node('').abspath()
+
+        env.LINKFLAGS = cfg.env.CPU_FLAGS + [
+            '-fomit-frame-pointer',
+            '-falign-functions=16',
+            '-ffunction-sections',
+            '-fdata-sections',
+            '-u_port_lock',
+            '-u_port_unlock',
+            '-u_exit',
+            '-u_kill',
+            '-u_getpid',
+            '-u_errno',
+            '-uchThdExit',
+            '-fno-common',
+            '-nostartfiles',
+            '-mno-thumb-interwork',
+            '-mthumb',
+            '--specs=nano.specs',
+            '--specs=nosys.specs',
+            '-L%s' % env.BUILDROOT,
+            '-L%s' % cfg.srcnode.make_node('libraries/AP_HAL_threadX/hwdef/common/startup/ARMCMx/compilers/GCC/ld/').abspath(),
+            '-L%s' % cfg.srcnode.make_node('libraries/AP_HAL_threadX/hwdef/common/').abspath(),
+            '-Wl,-Map,Linker.map,%s--cref,--gc-sections,--no-warn-mismatch,--library-path=/ld,--script=ldscript.ld,--defsym=__process_stack_size__=%s,--defsym=__main_stack_size__=%s' % ("--print-memory-usage," if cfg.env.EXT_FLASH_SIZE_MB > 0 and cfg.env.INT_FLASH_PRIMARY == 0 else "", cfg.env.PROCESS_STACK, cfg.env.MAIN_STACK)
+        ]
+
+        if cfg.env.DEBUG:
+            env.CFLAGS += [
+                '-gdwarf-4',
+                '-g3',
+            ]
+            env.LINKFLAGS += [
+                '-gdwarf-4',
+                '-g3',
+            ]
+
+        if cfg.env.COMPILER_CXX == "g++":
+            if not self.cc_version_gte(cfg, 10, 2):
+                # require at least 10.2 compiler
+                cfg.fatal("threadX build requires g++ version 10.2.1 or later, found %s" % '.'.join(cfg.env.CC_VERSION))
+            
+        if cfg.env.ENABLE_ASSERTS:
+            cfg.msg("Enabling threadX asserts", "yes")
+            env.CFLAGS += [ '-DHAL_THREADX_ENABLE_ASSERTS' ]
+            env.CXXFLAGS += [ '-DHAL_THREADX_ENABLE_ASSERTS' ]
+        else:
+            cfg.msg("Enabling threadX asserts", "no")
+
+
+        if cfg.env.SAVE_TEMPS:
+            env.CXXFLAGS += [ '-S', '-save-temps=obj' ]
+
+        if cfg.options.disable_watchdog:
+            cfg.msg("Disabling Watchdog", "yes")
+            env.CFLAGS += [ '-DDISABLE_WATCHDOG' ]
+            env.CXXFLAGS += [ '-DDISABLE_WATCHDOG' ]
+        else:
+            cfg.msg("Disabling Watchdog", "no")
+
+        if cfg.env.ENABLE_MALLOC_GUARD:
+            cfg.msg("Enabling malloc guard", "yes")
+            env.CFLAGS += [ '-DHAL_THREADX_ENABLE_MALLOC_GUARD' ]
+            env.CXXFLAGS += [ '-DHAL_THREADX_ENABLE_MALLOC_GUARD' ]
+        else:
+            cfg.msg("Enabling malloc guard", "no")
+            
+        if cfg.env.ENABLE_STATS:
+            cfg.msg("Enabling threadX thread statistics", "yes")
+            env.CFLAGS += [ '-DHAL_ENABLE_THREAD_STATISTICS' ]
+            env.CXXFLAGS += [ '-DHAL_ENABLE_THREAD_STATISTICS' ]
+        else:
+            cfg.msg("Enabling threadX thread statistics", "no")
+
+        if cfg.env.SIM_ENABLED:
+            env.DEFINES.update(
+                AP_SIM_ENABLED = 1,
+            )
+            env.AP_LIBRARIES += [
+                'SITL',
+            ]
+        else:
+            env.DEFINES.update(
+                AP_SIM_ENABLED = 0,
+            )
+
+        env.LIB += ['gcc', 'm']
+
+        env.GIT_SUBMODULES += [
+            'threadX',
+        ]
+
+        env.INCLUDES += [
+            cfg.srcnode.find_dir('libraries/AP_GyroFFT/CMSIS_5/include').abspath(),
+            cfg.srcnode.find_dir('modules/lwip/src/include/compat/posix').abspath()
+        ]
+
+        # whitelist of compilers which we should build with -Werror
+        gcc_whitelist = frozenset([
+            ('4','9','3'),
+            ('6','3','1'),
+            ('9','2','1'),
+            ('9','3','1'),
+            ('10','2','1'),
+            ('11','3','0'),
+            ('11','4','0'),
+        ])
+
+        if cfg.env.HAL_CANFD_SUPPORTED:
+            env.DEFINES.update(CANARD_ENABLE_CANFD=1)
+        else:
+            env.DEFINES.update(CANARD_ENABLE_TAO_OPTION=1)
+        if not cfg.options.bootloader and cfg.env.HAL_NUM_CAN_IFACES:
+            if int(cfg.env.HAL_NUM_CAN_IFACES) >= 1:
+                env.DEFINES.update(CANARD_IFACE_ALL=(1<<int(cfg.env.HAL_NUM_CAN_IFACES))-1)
+        if cfg.options.Werror or cfg.env.CC_VERSION in gcc_whitelist:
+            cfg.msg("Enabling -Werror", "yes")
+            if '-Werror' not in env.CXXFLAGS:
+                env.CXXFLAGS += [ '-Werror' ]
+        else:
+            cfg.msg("Enabling -Werror", "no")
+
+        if cfg.options.signed_fw:
+            cfg.define('AP_SIGNED_FIRMWARE', 1)
+            env.CFLAGS += [
+                '-DAP_SIGNED_FIRMWARE=1',
+            ]
+        else:
+            cfg.define('AP_SIGNED_FIRMWARE', 0)
+            env.CFLAGS += [
+                '-DAP_SIGNED_FIRMWARE=0',
+            ]
+
+        try:
+            import intelhex
+            env.HAVE_INTEL_HEX = True
+            cfg.msg("Checking for intelhex module:", 'OK')
+        except Exception:
+            cfg.msg("Checking for intelhex module:", 'disabled', color='YELLOW')
+            env.HAVE_INTEL_HEX = False
+
+        if cfg.options.enable_new_checking:
+            env.CHECK_SYMBOLS = True
+        else:
+            # disable new checking on threadX by default to save flash
+            # we enable it in a CI test to catch incorrect usage
+            env.CXXFLAGS += [
+                "-DNEW_NOTHROW=new",
+                "-fcheck-new", # rely on -fcheck-new ensuring nullptr checks
+                ]
+
+    def build(self, bld):
+        super().build(bld)
+        bld.ap_version_append_str('THREADX_GIT_VERSION', bld.git_submodule_head_hash('threadX', short=True))
+        bld.load('threadx')
+
+    def pre_build(self, bld):
+        '''pre-build hook that gets called before dynamic sources'''
+        from waflib.Context import load_tool
+        module = load_tool('threadx', [], with_sys_path=True)
+        fun = getattr(module, 'pre_build', None)
+        if fun:
+            fun(bld)
+        super().pre_build(bld)
 
     def get_name(self):
         return self.name
